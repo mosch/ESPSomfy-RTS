@@ -3,11 +3,11 @@ name: ESPSomfy-RTS
 on: [push, pull_request]
 
 env:
-  ARDUINO_BOARD_MANAGER_ADDITIONAL_URLS: "https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_dev_index.json"
+  ARDUINO_BOARD_MANAGER_ADDITIONAL_URLS: "https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json"
   ARDUINO_CLI_VERSION: "0.x"
-  ARDUINO_ESP32_VERSION: "2.0.10"
-  ARDUINO_JSON_VERSION: "6.21.3"
-  ESPTOOL_VERSION: "4.6"
+  ARDUINO_ESP32_VERSION: "3.3.12"
+  ARDUINO_JSON_VERSION: "6.21.5"
+  ESPTOOL_VERSION: "4.7"
   LITTLEFS_VERSION: "v2.5.1"
   MKLITTLEFS_VERSION: "3.1.0"
   PUB_SUB_CLIENT_VERSION: "2.8.0"
@@ -22,17 +22,17 @@ jobs:
 
     steps:
       - name: Check out code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Checkout mklittlefs
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: earlephilhower/mklittlefs
           path: mklittlefs
           ref: ${{ env.MKLITTLEFS_VERSION }}
 
       - name: Checkout LittleFS
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: littlefs-project/littlefs
           path: mklittlefs/littlefs
@@ -47,7 +47,7 @@ jobs:
           ./mklittlefs/mklittlefs --create data --size 1441792 SomfyController.littlefs.bin
 
       - name: Upload binaries
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: LittleFS
           path: SomfyController.littlefs.bin
@@ -61,41 +61,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Matter needs the 8MB partition table (partitions.csv) and the octal PSRAM of the ESP32-S3 N16R8/N8R8 modules.
+        # It does not fit the DRAM of the classic ESP32.
         include:
-          - board: esp32
-            addr_bootloader: 0x1000
-            chip: ESP32
-            fqbn: esp32:esp32:esp32
-            name: ESP32
-          - board: lolin_c3_mini
-            addr_bootloader: 0x0
-            chip: ESP32-C3
-            fqbn: esp32:esp32:lolin_c3_mini
-            name: LOLIN-C3-mini
-          - board: lolin_s2_mini
-            addr_bootloader: 0x1000
-            chip: ESP32-S2
-            fqbn: esp32:esp32:lolin_s2_mini
-            name: LOLIN-S2-mini
-          - board: lolin_s3_mini
+          - board: esp32s3
             addr_bootloader: 0x0
             chip: ESP32-S3
-            fqbn: esp32:esp32:lolin_s3_mini
-            name: LOLIN-S3-mini
+            fqbn: esp32:esp32:esp32s3:JTAGAdapter=default,PSRAM=opi,FlashMode=qio,FlashSize=8M,LoopCore=1,EventsCore=1,USBMode=hwcdc,CDCOnBoot=cdc,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,PartitionScheme=default,CPUFreq=240,UploadSpeed=921600,DebugLevel=none,EraseFlash=none
+            name: ESP32S3
 
     steps:
       - name: Check out code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           path: SomfyController
 
       - name: Get LittleFS
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: LittleFS
 
       - name: Install Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -128,7 +115,7 @@ jobs:
       - name: Build ${{ matrix.name }}
         run: |
           mkdir -p build
-          arduino-cli compile --clean --output-dir build --fqbn ${{ matrix.fqbn }} --warnings default ./SomfyController
+          arduino-cli compile --clean --output-dir build --fqbn ${{ matrix.fqbn }} --build-property upload.maximum_size=2621440 --warnings default ./SomfyController
 
       - name: ${{ matrix.name }} Image
         run: |
@@ -140,7 +127,7 @@ jobs:
             0x290000 SomfyController.littlefs.bin
 
       - name: Upload ${{ matrix.name }}
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
           path: |

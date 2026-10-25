@@ -3,6 +3,7 @@
 #include <Update.h>
 #include <HTTPClient.h>
 #include <esp_task_wdt.h>
+#include <esp_chip_info.h>
 #include "ConfigSettings.h"
 #include "GitOTA.h"
 #include "Utils.h"
@@ -10,17 +11,17 @@
 #include "Somfy.h"
 #include "Web.h"
 #include "WResp.h"
-#include "Network.h"
+#include "ESPNetwork.h"
 
 
 
 
 extern ConfigSettings settings;
 extern SocketEmitter sockEmit;
-extern SomfyShadeController somfy;
+extern SomfyShadeController &somfy;
 extern rebootDelay_t rebootDelay;
 extern Web webServer;
-extern Network net;
+extern ESPNetwork net;
 
 
 
@@ -98,7 +99,7 @@ int16_t GitRepo::getReleases(uint8_t num) {
   uint8_t count = min((uint8_t)GIT_MAX_RELEASES, num);
   char url[128];
   memset(this->releases, 0x00, sizeof(GitRelease) * GIT_MAX_RELEASES);
-  sprintf(url, "https://api.github.com/repos/rstrouse/espsomfy-rts/releases?per_page=%d&page=1", count);
+  sprintf(url, "https://api.github.com/repos/" GIT_REPO "/releases?per_page=%d&page=1", count);
   GitRelease *main = &this->releases[GIT_MAX_RELEASES];
   main->releaseDate = Timestamp::now();
   main->id = 1;
@@ -357,7 +358,7 @@ int GitUpdater::checkInternet() {
   esp_task_wdt_reset();
   HTTPClient https;
   https.setReuse(false);
-  if(https.begin(sclient, "https://github.com/rstrouse/ESPSomfy-RTS")) {
+  if(https.begin(sclient, "https://github.com/" GIT_REPO)) {
     https.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
     https.setTimeout(3000);
     esp_task_wdt_reset();
@@ -421,8 +422,8 @@ void GitUpdater::setFirmwareFile() {
 
 bool GitUpdater::beginUpdate(const char *version) {
   Serial.println("Begin update called...");
-  if(strcmp(version, "Main") == 0)  strcpy(this->baseUrl, "https://raw.githubusercontent.com/rstrouse/ESPSomfy-RTS/master/");
-  else sprintf(this->baseUrl, "https://github.com/rstrouse/ESPSomfy-RTS/releases/download/%s/", version);
+  if(strcmp(version, "Main") == 0)  strcpy(this->baseUrl, "https://raw.githubusercontent.com/" GIT_REPO "/main/");
+  else sprintf(this->baseUrl, "https://github.com/" GIT_REPO "/releases/download/%s/", version);
   
   strcpy(this->targetRelease, version);
   this->emitUpdateCheck();
@@ -452,7 +453,7 @@ bool GitUpdater::beginUpdate(const char *version) {
   return true;
 }
 bool GitUpdater::recoverFilesystem() {
-  sprintf(this->baseUrl, "https://github.com/rstrouse/ESPSomfy-RTS/releases/download/%s/", settings.fwVersion.name);
+  sprintf(this->baseUrl, "https://github.com/" GIT_REPO "/releases/download/%s/", settings.fwVersion.name);
   strcpy(this->currentFile, "SomfyController.littlefs.bin");
   this->status = GIT_UPDATING;
   this->partition = U_SPIFFS;

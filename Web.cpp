@@ -13,16 +13,18 @@
 #include "Web.h"
 #include "MQTT.h"
 #include "GitOTA.h"
-#include "Network.h"
+#include "ESPNetwork.h"
+#include "SomfyMatter.h"
 
 extern ConfigSettings settings;
 extern SSDPClass SSDP;
 extern rebootDelay_t rebootDelay;
-extern SomfyShadeController somfy;
+extern SomfyShadeController &somfy;
 extern Web webServer;
 extern MQTTClass mqtt;
 extern GitUpdater git;
-extern Network net;
+extern ESPNetwork net;
+extern SomfyMatter matter;
 
 //#define WEB_MAX_RESPONSE 34768
 #define WEB_MAX_RESPONSE 4096
@@ -2588,6 +2590,65 @@ void Web::begin() {
     serializeJson(doc, g_content);
     server.send(200, _encoding_json, g_content);
     */
+    });
+  server.on("/matter", []() {
+    webServer.sendCORSHeaders(server);
+    if(server.method() == HTTP_OPTIONS) { server.send(200, "OK"); return; }
+    // The pairing code lets anyone on the network add the controller to their Matter fabric.
+    if(!webServer.isAuthenticated(server, true)) return;
+    JsonResponse resp;
+    resp.beginResponse(&server, g_content, sizeof(g_content));
+    resp.beginObject();
+    matter.toJSON(resp);
+    resp.endObject();
+    resp.endResponse();
+    });
+  server.on("/saveMatter", []() {
+    webServer.sendCORSHeaders(server);
+    if(server.method() == HTTP_OPTIONS) { server.send(200, "OK"); return; }
+    if(!webServer.isAuthenticated(server, true)) return;
+    HTTPMethod method = server.method();
+    if(method != HTTP_POST && method != HTTP_PUT) {
+      server.send(201, _encoding_json, "{\"status\":\"ERROR\",\"desc\":\"Invalid HTTP Method: \"}");
+      return;
+    }
+    DynamicJsonDocument doc(256);
+    DeserializationError err = deserializeJson(doc, server.arg("plain"));
+    if(err) {
+      webServer.handleDeserializationError(server, err);
+      return;
+    }
+    JsonObject obj = doc.as<JsonObject>();
+    bool enabled = settings.Matter.enabled;
+    settings.Matter.fromJSON(obj);
+    settings.Matter.save();
+    if(enabled != settings.Matter.enabled) {
+      // The Matter stack cannot be stopped once started and IPv6 is set up when connecting.
+      Serial.println("Matter setting changed, rebooting...");
+      rebootDelay.reboot = true;
+      rebootDelay.rebootTime = millis() + 1000;
+    }
+    JsonResponse resp;
+    resp.beginResponse(&server, g_content, sizeof(g_content));
+    resp.beginObject();
+    matter.toJSON(resp);
+    resp.endObject();
+    resp.endResponse();
+    });
+  server.on("/resetMatter", []() {
+    webServer.sendCORSHeaders(server);
+    if(server.method() == HTTP_OPTIONS) { server.send(200, "OK"); return; }
+    if(!webServer.isAuthenticated(server, true)) return;
+    HTTPMethod method = server.method();
+    if(method != HTTP_POST && method != HTTP_PUT) {
+      server.send(201, _encoding_json, "{\"status\":\"ERROR\",\"desc\":\"Invalid HTTP Method: \"}");
+      return;
+    }
+    Serial.println("Resetting Matter...");
+    server.send(200, _encoding_json, "{\"status\":\"OK\",\"desc\":\"Removing Matter pairings and rebooting\"}");
+    delay(500);
+    // Restarts the ESP once the Matter data is erased.
+    matter.decommission();
     });
   server.on("/roomSortOrder", []() {
     if(server.method() == HTTP_OPTIONS) { server.send(200, "OK"); return; }

@@ -273,7 +273,7 @@
                     </div>
                 </div>
                 <div id="divNetworkSettings" style="display:none;">
-                    <div class="subtab-container"><span class="selected" data-grpid="divNetAdapter">Adapter</span><span data-grpid="divDHCP">DHCP/Static IP</span><span data-grpid="divMQTT">MQTT</span></div>
+                    <div class="subtab-container"><span class="selected" data-grpid="divNetAdapter">Adapter</span><span data-grpid="divDHCP">DHCP/Static IP</span><span data-grpid="divMQTT">MQTT</span><span data-grpid="divMatter">Matter</span></div>
                     <div id="divNetAdapter" class="subtab-content">
                         <div class="field-group" style="vertical-align:middle;color:#00bcd4;margin-top:-24px;">
                             <input id="cbHardwired" name="hardwired" data-bind="ethernet.hardwired" type="checkbox" style="display:inline-block;" onclick="wifi.useEthernetClicked();" />
@@ -424,6 +424,40 @@
 
                         <div class="button-container">
                             <button id="btnConnectMQTT" type="button" onclick="mqtt.connectMQTT();">Save MQTT Settings</button>
+                        </div>
+                    </div>
+                    <div id="divMatter" class="subtab-content" style="display:none;">
+                        <div id="divMatterUnsupported" style="display:none;">
+                            Matter needs the 8MB partition layout. Flash this firmware once over USB as described in the README.
+                        </div>
+                        <div id="divMatterSupported">
+                            <div class="field-group" style="vertical-align:middle;margin-top:-20px;">
+                                <input id="cbMatterEnabled" name="matter-enabled" type="checkbox" data-bind="matter.enabled" style="display:inline-block;" />
+                                <label for="cbMatterEnabled" style="display:inline-block;cursor:pointer;">Enable Matter bridge</label>
+                            </div>
+                            <div style="font-size:.8em;margin-bottom:12px;">
+                                Shades are exposed as Matter window coverings. Garage doors, gates and dry contacts are not exposed.
+                                Changes to shades are picked up after a reboot. Saving a change to this setting reboots the controller.
+                            </div>
+                            <div id="divMatterStatus" style="display:none;">
+                                <div class="field-group"><label>Status</label><span id="spanMatterStatus"></span></div>
+                                <div class="field-group"><label>Shades exposed</label><span id="spanMatterEndpoints"></span></div>
+                                <div id="divMatterPairing" style="display:none;">
+                                    <div class="field-group">
+                                        <label>Manual pairing code</label>
+                                        <span id="spanMatterCode" style="font-size:1.5em;letter-spacing:2px;"></span>
+                                    </div>
+                                    <div class="field-group">
+                                        <a id="aMatterQRCode" href="#" target="_blank" rel="noopener noreferrer">Show pairing QR code</a>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="button-container">
+                                <button id="btnSaveMatter" type="button" onclick="matter.saveMatter();">Save Matter Settings</button>
+                            </div>
+                            <div class="button-container">
+                                <button id="btnResetMatter" type="button" style="background:orangered;" onclick="matter.resetMatter();">Remove all Matter pairings</button>
+                            </div>
                         </div>
                     </div>
                 </div>

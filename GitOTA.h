@@ -7,6 +7,7 @@
 #include "WResp.h"
 
 #define GIT_MAX_RELEASES 5
+#define GIT_REPO "mosch/ESPSomfy-RTS"
 #define GIT_STATUS_READY 0
 #define GIT_STATUS_CHECK 1
 #define GIT_AWAITING_UPDATE 2

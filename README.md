@@ -69,6 +69,25 @@ While the interface that comes with the ESPSomfy RTS is a huge improvement, the 
 
 You can find the documentation for the interfaces in the [Integrations](https://github.com/rstrouse/ESPSomfy-RTS/wiki/Integrations) wiki.  Plenty of stuff there for you folks that make red nodes and stuff.
   
+## Matter (this fork)
+This fork adds a Matter bridge.  Each shade appears in Matter controllers (Apple Home, Google Home, Home Assistant, ...) as a window covering with its ESPSomfy name.  Lift and tilt positions, open, close and stop are supported.  Garage doors, gates and dry contacts are not exposed so that commands like "close all blinds" cannot open them.
+
+Requirements and limitations:
+* ESP32-S3 with at least 8MB of flash and octal PSRAM (e.g. N16R8 or N8R8 modules).  Without PSRAM there is too little free RAM for Matter.  The classic ESP32 does not have enough RAM for Matter with the precompiled Arduino libraries and the 4MB flash layout has no room for the larger firmware.
+* Pairing happens over the network (WiFi or Ethernet), not Bluetooth.  Enable Matter under Settings > Network > Matter, then add the device in your controller using the manual pairing code shown there.  Additional controllers are added from an already paired one (multi-admin).
+* Endpoints are created at boot, so added, removed or renamed shades show up after a reboot.  Endpoint ids follow the shade ids, removing a shade changes the endpoints of shades created after it.
+* Every device generates its own random pairing passcode.  "Remove all Matter pairings" resets only the Matter data, not the ESPSomfy settings.
+
+### One time migration from the stock firmware
+The Matter firmware needs a different partition table, which cannot be changed over the air.  The layout in [partitions.csv](partitions.csv) keeps the settings (nvs at 0x9000) and the shades and web files (LittleFS at 0x290000) at the same place, so nothing has to be restored.
+
+1. Download `SomfyController.bootloader.esp32s3.bin`, `SomfyController.partitions.esp32s3.bin` and `SomfyController.ino.esp32s3.bin` from the release into a folder.
+2. Connect the controller over USB and install esptool 4.7 or later (`pip install esptool`).
+3. Run `scripts/migrate-to-matter.sh <serial port> <folder>`.  It refuses to run unless it finds the stock layout and 8MB of flash, saves a full flash backup, then writes the bootloader, partition table and firmware.
+4. After the controller boots, update the file system from the web ui with `SomfyController.littlefs.bin` (Firmware > Update Application) to get the Matter settings page.
+
+Later updates work over the air again.  Do not flash the onboard image or erase the flash during the migration, that would wipe the settings.
+
 ## Sources for this Project
 I spent some time reading about a myriad of topics but in the end the primary source for this project comes from https://pushstack.wordpress.com/somfy-rts-protocol/.  The work done on pushstack regarding the protocol timing made this feasible without burning a bunch of time measuring pulses.  
   

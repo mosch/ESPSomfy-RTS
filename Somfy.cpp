@@ -3,6 +3,7 @@
 #include <SPI.h>
 #include <WebServer.h>
 #include <esp_task_wdt.h>
+#include <esp_chip_info.h>
 #include "Utils.h"
 #include "ConfigSettings.h"
 #include "Somfy.h"
@@ -11,8 +12,8 @@
 #include "ConfigFile.h"
 #include "GitOTA.h"
 
-extern Preferences pref;
-extern SomfyShadeController somfy;
+extern SomfyPreferences pref;
+extern SomfyShadeController &somfy;
 extern SocketEmitter sockEmit;
 extern ConfigSettings settings;
 extern MQTTClass mqtt;

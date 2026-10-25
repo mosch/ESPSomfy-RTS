@@ -5,7 +5,7 @@
 #include "ConfigSettings.h"
 #include "MQTT.h"
 #include "Somfy.h"
-#include "Network.h"
+#include "ESPNetwork.h"
 #include "Utils.h"
 
 WiFiClient tcpClient;
@@ -15,8 +15,8 @@ PubSubClient mqttClient(tcpClient);
 static char g_content[MQTT_MAX_RESPONSE];
 
 extern ConfigSettings settings;
-extern SomfyShadeController somfy;
-extern Network net;
+extern SomfyShadeController &somfy;
+extern ESPNetwork net;
 extern rebootDelay_t rebootDelay;
 
 

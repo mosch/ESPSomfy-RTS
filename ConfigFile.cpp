@@ -5,7 +5,7 @@
 #include "Utils.h"
 #include "ConfigSettings.h"
 
-extern Preferences pref;
+extern SomfyPreferences pref;
 
 #define SHADE_HDR_VER 24
 #define SHADE_HDR_SIZE 76
@@ -661,8 +661,8 @@ bool ShadeConfigFile::readNetRecord(restore_options_t &opts) {
       if(strncmp(settings.serverId, this->header.serverId, sizeof(settings.serverId)) == 0) {
         Serial.println("Restoring Ethernet adapter settings");
         settings.Ethernet.boardType = this->readUInt8(1);
-        settings.Ethernet.phyType = static_cast<eth_phy_type_t>(this->readUInt8(0));
-        settings.Ethernet.CLKMode = static_cast<eth_clock_mode_t>(this->readUInt8(0));
+        settings.Ethernet.phyType = this->readUInt8(0);
+        settings.Ethernet.CLKMode = this->readUInt8(0);
         settings.Ethernet.phyAddress = this->readInt8(1);
         settings.Ethernet.PWRPin = this->readInt8(1);
         settings.Ethernet.MDCPin = this->readInt8(16);

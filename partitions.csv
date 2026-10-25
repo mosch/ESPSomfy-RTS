@@ -1,0 +1,14 @@
+# ESPSomfy-RTS 8MB layout with Matter support.
+#
+# Upgrading from the stock 4MB layout keeps all data in place:
+#  - espsomfy: the original nvs partition (0x9000) relabeled.  ESPSomfy settings are read from here.
+#  - spiffs:   the original LittleFS partition (0x290000) at the same offset and size, shades.cfg survives.
+#  - nvs:      new default nvs partition used by Matter (fabrics, keys) and the WiFi driver.
+# Name,   Type, SubType,  Offset,   Size,     Flags
+espsomfy, data, nvs,      0x9000,   0x5000,
+otadata,  data, ota,      0xe000,   0x2000,
+app0,     app,  ota_0,    0x10000,  0x280000,
+spiffs,   data, spiffs,   0x290000, 0x160000,
+coredump, data, coredump, 0x3F0000, 0x10000,
+app1,     app,  ota_1,    0x400000, 0x280000,
+nvs,      data, nvs,      0x680000, 0x20000,

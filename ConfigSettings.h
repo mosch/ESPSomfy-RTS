@@ -1,9 +1,19 @@
 #include <ArduinoJson.h>
 #include <ETH.h>
+#include <Preferences.h>
 #ifndef configsettings_h
 #define configsettings_h
 #include "WResp.h"
-#define FW_VERSION "v2.4.7"
+#define FW_VERSION "v2.5.0"
+// ESPSomfy settings are kept in the "espsomfy" nvs partition.  This is the original nvs partition at 0x9000 relabeled
+// so existing settings survive the move to the Matter partition table and the default "nvs" partition is free for Matter.
+// When the partition table does not have it the default nvs partition is used.
+#define SOMFY_NVS_PARTITION "espsomfy"
+class SomfyPreferences : public Preferences {
+  public:
+    static const char * partitionLabel();
+    bool begin(const char *name, bool readOnly = false) { return Preferences::begin(name, readOnly, partitionLabel()); }
+};
 enum class conn_types_t : byte {
     unset = 0x00,
     wifi = 0x01,
@@ -92,12 +102,29 @@ class EthernetSettings: BaseSettings {
   public:
     EthernetSettings();
     uint8_t boardType = 0; // These board types are enumerated in the ui and used to set the chip settings.
-    eth_phy_type_t phyType = ETH_PHY_LAN8720;
-    eth_clock_mode_t CLKMode = ETH_CLOCK_GPIO0_IN;
-    int8_t phyAddress = ETH_PHY_ADDR;
-    int8_t PWRPin = ETH_PHY_POWER;
-    int8_t MDCPin = ETH_PHY_MDC;
-    int8_t MDIOPin = ETH_PHY_MDIO;
+    // phyType and CLKMode keep the arduino-esp32 2.x numbering (LAN8720 = 0) so values already
+    // stored in NVS and used by the ui stay valid.  Use ethPhyType() to get the 3.x enum.
+    uint8_t phyType = 0; // LAN8720
+    uint8_t CLKMode = 0; // GPIO0_IN
+    int8_t phyAddress = 0;
+    int8_t PWRPin = -1;
+    int8_t MDCPin = 23;
+    int8_t MDIOPin = 18;
+#if CONFIG_ETH_USE_ESP32_EMAC
+    eth_phy_type_t ethPhyType() {
+      // 2.x order: LAN8720, TLK110, RTL8201, DP83848, DM9051, KSZ8041, KSZ8081
+      switch(this->phyType) {
+        case 0: return ETH_PHY_LAN8720;
+        case 1: return ETH_PHY_TLK110;
+        case 2: return ETH_PHY_RTL8201;
+        case 3: return ETH_PHY_DP83848;
+        case 5: return ETH_PHY_KSZ8041;
+        case 6: return ETH_PHY_KSZ8081;
+        default: return ETH_PHY_MAX; // The DM9051 is an SPI phy in 3.x and cannot be started as an RMII phy.
+      }
+    }
+    eth_clock_mode_t ethClockMode() { return static_cast<eth_clock_mode_t>(this->CLKMode); }
+#endif
     
     bool begin();
     bool fromJSON(JsonObject &obj);
@@ -166,6 +193,19 @@ class MQTTSettings: BaseSettings {
     void toJSON(JsonResponse &json);
     bool fromJSON(JsonObject &obj);
 };
+class MatterSettings: BaseSettings {
+  public:
+    bool enabled = false;
+    uint16_t discriminator = 0;
+    uint32_t passcode = 0;
+    bool begin();
+    bool save();
+    bool load();
+    bool toJSON(JsonObject &obj);
+    void toJSON(JsonResponse &json);
+    bool fromJSON(JsonObject &obj);
+    void generateSetupCodes();
+};
 class ConfigSettings: BaseSettings {
   public:
     static void printAvailHeap();
@@ -183,6 +223,7 @@ class ConfigSettings: BaseSettings {
     EthernetSettings Ethernet;
     NTPSettings NTP;
     MQTTSettings MQTT;
+    MatterSettings Matter;
     SecuritySettings Security;
     bool requiresAuth();
     bool fromJSON(JsonObject &obj);

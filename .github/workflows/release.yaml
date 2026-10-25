@@ -7,7 +7,7 @@ on:
 env:
   ARDUINO_BOARD_MANAGER_ADDITIONAL_URLS: "https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json"
   ARDUINO_CLI_VERSION: "0.x"
-  ARDUINO_ESP32_VERSION: "2.0.17"
+  ARDUINO_ESP32_VERSION: "3.3.12"
   ARDUINO_JSON_VERSION: "6.21.5"
   ESPTOOL_VERSION: "4.7"
   LITTLEFS_VERSION: "v2.5.1"
@@ -79,39 +79,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Matter needs the 8MB partition table (partitions.csv) and the octal PSRAM of the ESP32-S3 N16R8/N8R8 modules.
+        # It does not fit the DRAM of the classic ESP32.
         include:
-          - board: esp32
-            addr_bootloader: 0x1000
-            chip: ESP32
-            fqbn: esp32:esp32:esp32wrover:PartitionScheme=default,FlashMode=qio,FlashFreq=80,UploadSpeed=921600,DebugLevel=none,EraseFlash=none
-            #     esp32:esp32:esp32wrover:PartitionScheme=default,FlashMode=qio,FlashFreq=80,UploadSpeed=921600,DebugLevel=none,EraseFlash=none
-            name: ESP32
-            obname: SomfyController.onboard.esp32.bin
-            fwname: SomfyController.ino.esp32.bin
-          - board: esp32c3
-            addr_bootloader: 0x0
-            chip: ESP32-C3
-            fqbn: esp32:esp32:esp32c3:JTAGAdapter=default,CDCOnBoot=cdc,PartitionScheme=default,CPUFreq=160,FlashMode=qio,FlashFreq=80,FlashSize=4M,UploadSpeed=921600,DebugLevel=none,EraseFlash=none
-            #     esp32:esp32:esp32c3:JTAGAdapter=default,CDCOnBoot=default,PartitionScheme=default,CPUFreq=160,FlashMode=qio,FlashFreq=80,FlashSize=4M,UploadSpeed=921600,DebugLevel=none,EraseFlash=none
-            name: ESP32C3
-            obname: SomfyController.onboard.esp32c3.bin
-            fwname: SomfyController.ino.esp32c3.bin
-          - board: esp32s2
-            addr_bootloader: 0x1000
-            chip: ESP32-S2
-            fqbn: esp32:esp32:esp32s2:JTAGAdapter=default,CDCOnBoot=cdc,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,PSRAM=disabled,PartitionScheme=default,CPUFreq=240,FlashMode=qio,FlashFreq=80,FlashSize=4M,UploadSpeed=921600,DebugLevel=none,EraseFlash=none
-            #     esp32:esp32:esp32s2:JTAGAdapter=default,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,PSRAM=disabled,PartitionScheme=default,CPUFreq=240,FlashMode=qio,FlashFreq=80,FlashSize=4M,UploadSpeed=921600,DebugLevel=none,EraseFlash=none
-            name: ESP32S2
-            obname: SomfyController.onboard.esp32s2.bin
-            fwname: SomfyController.ino.esp32s2.bin
           - board: esp32s3
             addr_bootloader: 0x0
             chip: ESP32-S3
-            fqbn: esp32:esp32:esp32s3:JTAGAdapter=default,PSRAM=disabled,FlashMode=qio,FlashSize=4M,LoopCore=1,EventsCore=1,USBMode=hwcdc,CDCOnBoot=cdc,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,PartitionScheme=default,CPUFreq=240,UploadSpeed=921600,DebugLevel=none,EraseFlash=none
-            #     esp32:esp32:esp32s3:JTAGAdapter=default,PSRAM=disabled,FlashMode=qio,FlashSize=4M,LoopCore=1,EventsCore=1,USBMode=hwcdc,CDCOnBoot=cdc,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,PartitionScheme=default,CPUFreq=240,UploadSpeed=921600,DebugLevel=none,EraseFlash=none
+            fqbn: esp32:esp32:esp32s3:JTAGAdapter=default,PSRAM=opi,FlashMode=qio,FlashSize=8M,LoopCore=1,EventsCore=1,USBMode=hwcdc,CDCOnBoot=cdc,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,PartitionScheme=default,CPUFreq=240,UploadSpeed=921600,DebugLevel=none,EraseFlash=none
             name: ESP32S3
             fwname: SomfyController.ino.esp32s3.bin
             obname: SomfyController.onboard.esp32s3.bin
+            blname: SomfyController.bootloader.esp32s3.bin
+            ptname: SomfyController.partitions.esp32s3.bin
+
     steps:
       - name: Get Release
         id: get_release
@@ -163,7 +143,7 @@ jobs:
       - name: Build ${{ matrix.name }}
         run: |
           mkdir -p build${{ matrix.name }}
-          arduino-cli compile --clean --output-dir build${{ matrix.name }} --fqbn ${{ matrix.fqbn }} --warnings none ./SomfyController
+          arduino-cli compile --clean --output-dir build${{ matrix.name }} --fqbn ${{ matrix.fqbn }} --build-property upload.maximum_size=2621440 --warnings none ./SomfyController
 
       - name: ${{ matrix.name }} Image
         run: |
@@ -181,6 +161,25 @@ jobs:
           upload_url: ${{ steps.get_release.outputs.upload_url }}
           asset_name: ${{ matrix.fwname }}
           asset_path: build${{ matrix.name }}/SomfyController.ino.bin
+
+      # The bootloader and partition table are needed for the one time USB migration to the Matter layout.
+      - name: Upload Bootloader ${{ matrix.name }}
+        uses: shogo82148/actions-upload-release-asset@v1.7.5
+        with:
+          github_token: ${{ github.token }}
+          upload_url: ${{ steps.get_release.outputs.upload_url }}
+          asset_name: ${{ matrix.blname }}
+          asset_path: build${{ matrix.name }}/SomfyController.ino.bootloader.bin
+          overwrite: true
+
+      - name: Upload Partitions ${{ matrix.name }}
+        uses: shogo82148/actions-upload-release-asset@v1.7.5
+        with:
+          github_token: ${{ github.token }}
+          upload_url: ${{ steps.get_release.outputs.upload_url }}
+          asset_name: ${{ matrix.ptname }}
+          asset_path: build${{ matrix.name }}/SomfyController.ino.partitions.bin
+          overwrite: true
 
       - name: ${{ matrix.name }} Compress Onboard Image
         run: |

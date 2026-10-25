@@ -566,6 +566,7 @@ async function initSockets() {
                     await wifi.loadNetwork();
                     await somfy.loadSomfy();
                     await mqtt.loadMQTT();
+                    await matter.loadMatter();
                     if (ui.isConfigOpen()) socket.send('join:0');
 
                     //await general.init();
@@ -1270,7 +1271,7 @@ var security = new Security();
 
 class General {
     initialized = false; 
-    appVersion = 'v2.4.7';
+    appVersion = 'v2.5.0';
     reloadApp = false;
     init() {
         if (this.initialized) return;
@@ -4270,6 +4271,50 @@ class MQTT {
     }
 }
 var mqtt = new MQTT();
+class Matter {
+    initialized = false;
+    init() { this.initialized = true; }
+    async loadMatter() {
+        getJSONSync('/matter', (err, status) => {
+            if (err)
+                console.log(err);
+            else
+                this.setStatus(status);
+        });
+    }
+    setStatus(status) {
+        document.getElementById('divMatterUnsupported').style.display = status.supported ? 'none' : '';
+        document.getElementById('divMatterSupported').style.display = status.supported ? '' : 'none';
+        ui.toElement(document.getElementById('divMatter'), { matter: status });
+        document.getElementById('divMatterStatus').style.display = status.enabled ? '' : 'none';
+        let desc = 'Waiting for network';
+        if (status.commissioned) desc = 'Paired';
+        else if (status.started) desc = 'Ready to pair';
+        else if (status.enabled && status.endpoints === 0) desc = 'No shades to expose';
+        document.getElementById('spanMatterStatus').innerText = desc;
+        document.getElementById('spanMatterEndpoints').innerText = status.endpoints;
+        // Additional controllers are added from an already paired controller (multi-admin).
+        document.getElementById('divMatterPairing').style.display = status.started && !status.commissioned ? '' : 'none';
+        document.getElementById('spanMatterCode').innerText = status.manualCode.replace(/^(\d{4})(\d{3})(\d+)$/, '$1-$2-$3');
+        document.getElementById('aMatterQRCode').href = status.qrCodeUrl;
+    }
+    saveMatter() {
+        let obj = ui.fromElement(document.getElementById('divMatter'));
+        putJSONSync('/saveMatter', { enabled: obj.matter.enabled }, (err, status) => {
+            if (err) ui.serviceError(err);
+            else this.setStatus(status);
+        });
+    }
+    resetMatter() {
+        ui.promptMessage('Are you sure you want to remove this controller from all Matter controllers?  The controller will reboot and must be paired again.', () => {
+            putJSONSync('/resetMatter', {}, (err, response) => {
+                if (err) ui.serviceError(err);
+                ui.clearErrors();
+            });
+        });
+    }
+}
+var matter = new Matter();
 class Firmware {
     initialized = false;
     init() { this.initialized = true; }

@@ -6,8 +6,15 @@
 #include "ConfigSettings.h"
 #include "Utils.h"
 #include "esp_chip_info.h"
+#include <esp_partition.h>
+#include <esp_random.h>
 
-Preferences pref;
+SomfyPreferences pref;
+
+const char * SomfyPreferences::partitionLabel() {
+  static const char *label = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, SOMFY_NVS_PARTITION) ? SOMFY_NVS_PARTITION : nullptr;
+  return label;
+}
 
 void restore_options_t::fromJSON(JsonObject &obj) {
   if(obj.containsKey("shades")) this->shades = obj["shades"];
@@ -195,6 +202,7 @@ bool ConfigSettings::begin() {
   this->Ethernet.begin();
   this->NTP.begin();
   this->MQTT.begin();
+  this->Matter.begin();
   this->print();
   return true;
 }
@@ -370,6 +378,55 @@ bool MQTTSettings::load() {
   this->enabled = pref.getBool("enabled", false);
   this->pubDisco = pref.getBool("pubDisco", false);
   pref.getString("discoTopic", this->discoTopic, sizeof(this->discoTopic));
+  pref.end();
+  return true;
+}
+bool MatterSettings::begin() {
+  this->load();
+  if(this->passcode == 0) {
+    this->generateSetupCodes();
+    this->save();
+  }
+  return true;
+}
+void MatterSettings::generateSetupCodes() {
+  // Each controller gets its own setup codes instead of the well known test passcode 20202021.
+  // The Matter spec disallows 00000000, 11111111...99999999, 12345678 and 87654321.
+  uint32_t code;
+  do {
+    code = (esp_random() % 99999998) + 1;
+  } while(code == 12345678 || code == 87654321 || code % 11111111 == 0);
+  this->passcode = code;
+  this->discriminator = esp_random() & 0x0FFF;
+}
+void MatterSettings::toJSON(JsonResponse &json) {
+  json.addElem("enabled", this->enabled);
+  json.addElem("discriminator", (uint32_t)this->discriminator);
+  json.addElem("passcode", this->passcode);
+}
+bool MatterSettings::toJSON(JsonObject &obj) {
+  obj["enabled"] = this->enabled;
+  obj["discriminator"] = this->discriminator;
+  obj["passcode"] = this->passcode;
+  return true;
+}
+bool MatterSettings::fromJSON(JsonObject &obj) {
+  if(obj.containsKey("enabled")) this->enabled = obj["enabled"];
+  return true;
+}
+bool MatterSettings::save() {
+  pref.begin("MATTER");
+  pref.putBool("enabled", this->enabled);
+  pref.putUShort("discrim", this->discriminator);
+  pref.putULong("passcode", this->passcode);
+  pref.end();
+  return true;
+}
+bool MatterSettings::load() {
+  pref.begin("MATTER");
+  this->enabled = pref.getBool("enabled", false);
+  this->discriminator = pref.getUShort("discrim", 0);
+  this->passcode = pref.getULong("passcode", 0);
   pref.end();
   return true;
 }
@@ -680,8 +737,8 @@ bool EthernetSettings::begin() {
 bool EthernetSettings::fromJSON(JsonObject &obj) {
   if(obj.containsKey("boardType")) this->boardType = obj["boardType"];
   if(obj.containsKey("phyAddress")) this->phyAddress = obj["phyAddress"];
-  if(obj.containsKey("CLKMode")) this->CLKMode = static_cast<eth_clock_mode_t>(obj["CLKMode"]);
-  if(obj.containsKey("phyType")) this->phyType = static_cast<eth_phy_type_t>(obj["phyType"]);
+  if(obj.containsKey("CLKMode")) this->CLKMode = obj["CLKMode"].as<uint8_t>();
+  if(obj.containsKey("phyType")) this->phyType = obj["phyType"].as<uint8_t>();
   if(obj.containsKey("PWRPin")) this->PWRPin = obj["PWRPin"];
   if(obj.containsKey("MDCPin")) this->MDCPin = obj["MDCPin"];
   if(obj.containsKey("MDIOPin")) this->MDIOPin = obj["MDIOPin"];
@@ -732,8 +789,8 @@ bool EthernetSettings::save() {
 bool EthernetSettings::load() {
   pref.begin("ETH");
   this->boardType = pref.getChar("boardType", this->boardType);
-  this->phyType = static_cast<eth_phy_type_t>(pref.getChar("phyType", ETH_PHY_LAN8720));
-  this->CLKMode = static_cast<eth_clock_mode_t>(pref.getChar("CLKMode", ETH_CLOCK_GPIO0_IN));
+  this->phyType = pref.getChar("phyType", 0);
+  this->CLKMode = pref.getChar("CLKMode", 0);
   this->phyAddress = pref.getChar("phyAddress", this->phyAddress);
   this->PWRPin = pref.getChar("PWRPin", this->PWRPin);
   this->MDCPin = pref.getChar("MDCPin", this->MDCPin);
