@@ -4,7 +4,7 @@
 #
 # Settings (nvs at 0x9000) and shades (LittleFS at 0x290000) stay where they are.  Only the
 # bootloader, partition table and firmware are written; otadata and the new Matter nvs
-# partition are erased.  A full flash backup is taken first.
+# partition are erased.  The first 4MB (everything the stock layout uses) is backed up first.
 #
 # usage: scripts/migrate-to-matter.sh <serial port> <dir with release binaries>
 #   The directory must contain the release assets:
@@ -71,8 +71,9 @@ print('Stock layout found: settings at 0x9000 and LittleFS at 0x290000 will be k
 EOF
 
 BACKUP="espsomfy-backup-$(date +%Y%m%d-%H%M%S).bin"
-echo "== Backing up the entire flash to $BACKUP"
-esptool read_flash 0x0 ALL "$BACKUP"
+# The stock layout ends at 0x400000, so this is enough to restore the previous firmware and data.
+echo "== Backing up the stock layout (first 4MB) to $BACKUP"
+esptool read_flash 0x0 0x400000 "$BACKUP"
 
 echo "== Writing the Matter layout"
 # Erased otadata boots app0 (the previous firmware may have been running from app1 at 0x150000).

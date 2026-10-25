@@ -83,7 +83,7 @@ The Matter firmware needs a different partition table, which cannot be changed o
 
 1. Download `SomfyController.bootloader.esp32s3.bin`, `SomfyController.partitions.esp32s3.bin` and `SomfyController.ino.esp32s3.bin` from the release into a folder.
 2. Connect the controller over USB and install esptool 4.7 or later (`pip install esptool`).
-3. Run `scripts/migrate-to-matter.sh <serial port> <folder>`.  It refuses to run unless it finds the stock layout and 8MB of flash, saves a full flash backup, then writes the bootloader, partition table and firmware.
+3. Run `scripts/migrate-to-matter.sh <serial port> <folder>`.  It refuses to run unless it finds the stock layout and 8MB of flash, saves a backup of the first 4MB (everything the stock layout uses), then writes the bootloader, partition table and firmware.
 4. After the controller boots, update the file system from the web ui with `SomfyController.littlefs.bin` (Firmware > Update Application) to get the Matter settings page.
 
 Later updates work over the air again.  Do not flash the onboard image or erase the flash during the migration, that would wipe the settings.
