@@ -4,6 +4,7 @@
 #include <WebServer.h>
 #include <esp_task_wdt.h>
 #include <esp_chip_info.h>
+#include <esp32-hal-periman.h>
 #include "Utils.h"
 #include "ConfigSettings.h"
 #include "Somfy.h"
@@ -19,6 +20,21 @@ extern ConfigSettings settings;
 extern MQTTClass mqtt;
 extern GitUpdater git;
 
+// The CC1101 library calls pinMode() on the SPI pins before every register access, also while its own
+// transaction is running in Init().  With arduino-esp32 3.x that detaches the pins from the SPI bus and
+// stops it.  SPIClass does not notice, skips restarting the bus and the next transfer waits forever (the
+// task watchdog then reboots).  Leave pins that are attached to an SPI bus alone.
+extern "C" void __pinMode(uint8_t pin, uint8_t mode);
+extern "C" void pinMode(uint8_t pin, uint8_t mode) {
+  switch(perimanGetPinBusType(pin)) {
+    case ESP32_BUS_TYPE_SPI_MASTER_SCK:
+    case ESP32_BUS_TYPE_SPI_MASTER_MISO:
+    case ESP32_BUS_TYPE_SPI_MASTER_MOSI:
+      return;
+    default:
+      __pinMode(pin, mode);
+  }
+}
 
 uint8_t rxmode = 0;  // Indicates whether the radio is in receive mode.  Just to ensure there isn't more than one interrupt hooked.
 #define SYMBOL 640
