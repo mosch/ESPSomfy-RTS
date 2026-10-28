@@ -70,7 +70,9 @@ While the interface that comes with the ESPSomfy RTS is a huge improvement, the 
 You can find the documentation for the interfaces in the [Integrations](https://github.com/rstrouse/ESPSomfy-RTS/wiki/Integrations) wiki.  Plenty of stuff there for you folks that make red nodes and stuff.
   
 ## Matter (this fork)
-This fork adds a Matter bridge.  Each shade appears in Matter controllers (Apple Home, Google Home, Home Assistant, ...) as a window covering with its ESPSomfy name.  Lift and tilt positions, open, close and stop are supported.  Garage doors, gates and dry contacts are not exposed so that commands like "close all blinds" cannot open them.
+This fork adds a Matter bridge.  Each shade appears in Matter controllers (Apple Home, Google Home, Home Assistant, ...) as a window covering with its ESPSomfy name.  Lift and tilt positions, open, close and stop are supported.  Garage doors, gates and dry contacts are not exposed so that commands like "close all blinds" cannot open them.  Groups appear as window coverings too: open and close go out as a single group frame so all paired motors move together.  Groups do not go to positions in between.  A group with a garage door, gate or dry contact in it is not exposed.
+
+Shades come first and groups after them, in id order.  Adding a shade therefore moves the groups to new endpoints and the controller sees them as new devices.
 
 Requirements and limitations:
 * ESP32-S3 with at least 8MB of flash and octal PSRAM (e.g. N16R8 or N8R8 modules).  Without PSRAM there is too little free RAM for Matter.  The classic ESP32 does not have enough RAM for Matter with the precompiled Arduino libraries and the 4MB flash layout has no room for the larger firmware.

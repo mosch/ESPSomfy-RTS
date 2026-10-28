@@ -14,12 +14,13 @@ extern ESPNetwork net;
 
 using namespace esp_matter;
 
-// The root node and the aggregator use two of the available endpoints.
-#define MATTER_MAX_SHADES (CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT - 2)
+// The root node and the aggregator use two of the available endpoints.  The rest are shades and groups.
+#define MATTER_MAX_ENDPOINTS (CONFIG_ESP_MATTER_MAX_DYNAMIC_ENDPOINT_COUNT - 2)
 #define MATTER_SYNC_INTERVAL 250
 #define MATTER_MOVING_POS_INTERVAL 1000
-// Controllers send a stream of targets while a slider is dragged.  Only act once the target has settled
-// so the motor does not get a burst of up/down commands.
+// Controllers send a stream of targets while a slider is dragged.  The first target is sent right away,
+// targets that follow within this time are collapsed into one so the motor does not get a burst of
+// up/down commands.
 #define MATTER_TARGET_SETTLE 1000
 
 enum class matter_actions_t : uint8_t {
@@ -28,12 +29,14 @@ enum class matter_actions_t : uint8_t {
   stop = 2
 };
 struct matter_cmd_t {
-  uint8_t shadeId;
+  uint8_t index;  // Into matterShades.
   matter_actions_t action;
   uint8_t value;
 };
+// A shade or a group.  Groups send one frame that all their paired motors receive.
 struct matter_shade_t {
-  uint8_t shadeId = 0;
+  uint8_t id = 0;
+  bool isGroup = false;
   MatterWindowCovering *ep = nullptr;
   bool hasLift = false;
   bool hasTilt = false;
@@ -48,9 +51,9 @@ struct matter_shade_t {
   uint32_t lastTiltPos = 0;
   int16_t pendingLift = -1;
   int16_t pendingTilt = -1;
-  uint32_t pendingTime = 0;
+  uint32_t lastTarget = 0;
 };
-static matter_shade_t matterShades[MATTER_MAX_SHADES];
+static matter_shade_t matterShades[MATTER_MAX_ENDPOINTS];
 static uint8_t matterShadeCount = 0;
 static QueueHandle_t matterQueue = nullptr;
 static TaskHandle_t matterLoopTask = nullptr;
@@ -98,13 +101,13 @@ static MatterWindowCovering::OperationalState_t toOperationalState(int8_t dir) {
   return MatterWindowCovering::STALL;
 }
 // Called on the Matter task.  The radio and shade state belong to the loop task so commands are queued.
-static bool queueCommand(uint8_t shadeId, matter_actions_t action, uint8_t value) {
+static bool queueCommand(matter_shade_t *ms, matter_actions_t action, uint8_t value) {
   // Attribute updates pushed by syncShades() come back through these callbacks.
   if(xTaskGetCurrentTaskHandle() == matterLoopTask) return true;
-  matter_cmd_t cmd = {shadeId, action, value};
+  matter_cmd_t cmd = {(uint8_t)(ms - matterShades), action, value};
   return xQueueSend(matterQueue, &cmd, 0) == pdTRUE;
 }
-static void addBridgedNode(endpoint_t *aggregator, MatterWindowCovering *ep, SomfyShade *shade) {
+static void addBridgedNode(endpoint_t *aggregator, MatterWindowCovering *ep, const char *name, const char *uid) {
   endpoint_t *wc = endpoint::get(node::get(), ep->getEndPointId());
   if(!wc || !aggregator) return;
   endpoint::bridged_node::config_t cfg;
@@ -116,12 +119,99 @@ static void addBridgedNode(endpoint_t *aggregator, MatterWindowCovering *ep, Som
   if(info) {
     namespace bdbi = cluster::bridged_device_basic_information::attribute;
     using namespace chip::app::Clusters::BridgedDeviceBasicInformation::Attributes;
-    if(!attribute::get(info, NodeLabel::Id)) bdbi::create_node_label(info, shade->name, strlen(shade->name));
-    char uid[33];
-    snprintf(uid, sizeof(uid), "%s-%u", settings.serverId, shade->getShadeId());
-    if(!attribute::get(info, UniqueID::Id)) bdbi::create_unique_id(info, uid, strlen(uid));
+    if(!attribute::get(info, NodeLabel::Id)) bdbi::create_node_label(info, (char *)name, strlen(name));
+    if(!attribute::get(info, UniqueID::Id)) bdbi::create_unique_id(info, (char *)uid, strlen(uid));
   }
   endpoint::set_parent_endpoint(wc, aggregator);
+}
+// Groups are only exposed when every linked shade is a window covering.  The group frame would
+// otherwise also open a garage door or gate.  Position is the average of the linked shades.
+static bool groupState(SomfyGroup *group, float *pos, float *target, int8_t *dir) {
+  uint8_t n = 0;
+  *pos = *target = 0.0f;
+  *dir = 0;
+  for(uint8_t i = 0; i < SOMFY_MAX_GROUPED_SHADES; i++) {
+    if(group->linkedShades[i] == 0) continue;
+    SomfyShade *shade = somfy.getShadeById(group->linkedShades[i]);
+    if(!shade) continue;
+    MatterWindowCovering::WindowCoveringType_t type;
+    if(!coveringType(shade, &type)) return false;
+    *pos += constrain(shade->currentPos, 0.0f, 100.0f);
+    *target += constrain(shade->target, 0.0f, 100.0f);
+    if(*dir == 0) *dir = shade->direction;
+    n++;
+  }
+  if(n == 0) return false;
+  *pos /= n;
+  *target /= n;
+  return true;
+}
+static matter_shade_t *addEndpoint(endpoint_t *aggregator, const char *name, const char *uid,
+    MatterWindowCovering::WindowCoveringType_t type, uint8_t lift, uint8_t tilt) {
+  if(matterShadeCount >= MATTER_MAX_ENDPOINTS) {
+    Serial.printf("Matter: only %d shades and groups can be exposed, skipping %s\n", MATTER_MAX_ENDPOINTS, name);
+    return nullptr;
+  }
+  MatterWindowCovering *ep = new MatterWindowCovering();
+  if(!ep->begin(lift, tilt, type)) {
+    Serial.printf("Matter: unable to create endpoint for %s\n", name);
+    delete ep;
+    return nullptr;
+  }
+  matter_shade_t *ms = &matterShades[matterShadeCount++];
+  ms->ep = ep;
+  ms->hasLift = type != MatterWindowCovering::BLIND_TILT_ONLY;
+  ms->hasTilt = type == MatterWindowCovering::BLIND_TILT_ONLY || type == MatterWindowCovering::BLIND_LIFT_AND_TILT;
+  ep->onStop([ms]() {
+    // The library reports StopMotion and then the same change again as a lift target.
+    ms->skipLift = true;
+    return queueCommand(ms, matter_actions_t::stop, 0);
+  });
+  ep->onGoToLiftPercentage([ms](uint8_t percent) {
+    if(ms->skipLift) {
+      ms->skipLift = false;
+      return true;
+    }
+    return queueCommand(ms, matter_actions_t::lift, percent);
+  });
+  ep->onGoToTiltPercentage([ms](uint8_t percent) { return queueCommand(ms, matter_actions_t::tilt, percent); });
+  addBridgedNode(aggregator, ep, name, uid);
+  Serial.printf("Matter: %s is endpoint %u\n", name, ep->getEndPointId());
+  return ms;
+}
+static void moveLift(matter_shade_t *ms, uint8_t pos) {
+  if(!ms->isGroup) {
+    SomfyShade *shade = somfy.getShadeById(ms->id);
+    if(!shade) return;
+    // Always send open and close, even when the shade is tracked at that position.  A motor at its
+    // end stop ignores it and a shade that was moved without us hearing it gets back in sync.
+    if(pos == 0) shade->sendCommand(somfy_commands::Up);
+    else if(pos == 100) shade->sendCommand(somfy_commands::Down);
+    else shade->moveToTarget(pos);
+    return;
+  }
+  SomfyGroup *group = somfy.getGroupById(ms->id);
+  if(!group) return;
+  if(pos == 0) group->sendCommand(somfy_commands::Up);
+  else if(pos == 100) group->sendCommand(somfy_commands::Down);
+  // Groups only open and close.  Push the real target back so the controller drops the position.
+  else ms->target = 0xFFFF;
+}
+static void moveTilt(matter_shade_t *ms, uint8_t pos) {
+  SomfyShade *shade = ms->isGroup ? nullptr : somfy.getShadeById(ms->id);
+  if(shade) shade->moveToTiltTarget(pos);
+}
+static void stop(matter_shade_t *ms) {
+  // My stops a moving motor but sends an idle one to its favorite position.
+  if(ms->isGroup) {
+    SomfyGroup *group = somfy.getGroupById(ms->id);
+    float pos, target;
+    int8_t dir;
+    if(group && groupState(group, &pos, &target, &dir) && dir != 0) group->sendCommand(somfy_commands::My);
+    return;
+  }
+  SomfyShade *shade = somfy.getShadeById(ms->id);
+  if(shade && (shade->direction != 0 || shade->tiltDirection != 0)) shade->sendCommand(somfy_commands::My);
 }
 bool SomfyMatter::supported() {
   // Without the espsomfy partition Matter would share the small settings nvs partition and
@@ -161,41 +251,29 @@ void SomfyMatter::start() {
     SomfyShade *shade = shades[i];
     MatterWindowCovering::WindowCoveringType_t type;
     if(!coveringType(shade, &type)) continue;
-    if(matterShadeCount >= MATTER_MAX_SHADES) {
-      Serial.printf("Matter: only %d shades can be exposed, skipping %s\n", MATTER_MAX_SHADES, shade->name);
-      continue;
-    }
-    MatterWindowCovering *ep = new MatterWindowCovering();
     uint8_t lift = (uint8_t)roundf(constrain(shade->currentPos, 0.0f, 100.0f));
     uint8_t tilt = (uint8_t)roundf(constrain(shade->currentTiltPos, 0.0f, 100.0f));
     if(type == MatterWindowCovering::BLIND_TILT_ONLY) lift = 0;
     else if(type != MatterWindowCovering::BLIND_LIFT_AND_TILT) tilt = 0;
-    if(!ep->begin(lift, tilt, type)) {
-      Serial.printf("Matter: unable to create endpoint for %s\n", shade->name);
-      delete ep;
-      continue;
+    char uid[33];
+    snprintf(uid, sizeof(uid), "%s-%u", settings.serverId, shade->getShadeId());
+    matter_shade_t *ms = addEndpoint(aggregator, shade->name, uid, type, lift, tilt);
+    if(ms) ms->id = shade->getShadeId();
+  }
+  // Groups come after the shades and are lift only.  Up and down go out as a single group frame.
+  for(uint8_t i = 0; i < SOMFY_MAX_GROUPS; i++) {
+    SomfyGroup *group = &somfy.groups[i];
+    if(group->getGroupId() == 255) continue;
+    float pos, target;
+    int8_t dir;
+    if(!groupState(group, &pos, &target, &dir)) continue;
+    char uid[33];
+    snprintf(uid, sizeof(uid), "%s-g%u", settings.serverId, group->getGroupId());
+    matter_shade_t *ms = addEndpoint(aggregator, group->name, uid, MatterWindowCovering::ROLLERSHADE, (uint8_t)roundf(pos), 0);
+    if(ms) {
+      ms->id = group->getGroupId();
+      ms->isGroup = true;
     }
-    matter_shade_t *ms = &matterShades[matterShadeCount++];
-    ms->shadeId = shade->getShadeId();
-    ms->ep = ep;
-    ms->hasLift = type != MatterWindowCovering::BLIND_TILT_ONLY;
-    ms->hasTilt = type == MatterWindowCovering::BLIND_TILT_ONLY || type == MatterWindowCovering::BLIND_LIFT_AND_TILT;
-    uint8_t shadeId = ms->shadeId;
-    ep->onStop([ms, shadeId]() {
-      // The library reports StopMotion and then the same change again as a lift target.
-      ms->skipLift = true;
-      return queueCommand(shadeId, matter_actions_t::stop, 0);
-    });
-    ep->onGoToLiftPercentage([ms, shadeId](uint8_t percent) {
-      if(ms->skipLift) {
-        ms->skipLift = false;
-        return true;
-      }
-      return queueCommand(shadeId, matter_actions_t::lift, percent);
-    });
-    ep->onGoToTiltPercentage([shadeId](uint8_t percent) { return queueCommand(shadeId, matter_actions_t::tilt, percent); });
-    addBridgedNode(aggregator, ep, shade);
-    Serial.printf("Matter: %s is endpoint %u\n", shade->name, ep->getEndPointId());
   }
   if(matterShadeCount == 0) {
     // Matter will not start without an endpoint beyond the aggregator.  Shades can be added
@@ -220,36 +298,33 @@ void SomfyMatter::start() {
 void SomfyMatter::processCommands() {
   matter_cmd_t cmd;
   while(xQueueReceive(matterQueue, &cmd, 0) == pdTRUE) {
-    matter_shade_t *ms = nullptr;
-    for(uint8_t i = 0; i < matterShadeCount && !ms; i++)
-      if(matterShades[i].shadeId == cmd.shadeId) ms = &matterShades[i];
-    SomfyShade *shade = somfy.getShadeById(cmd.shadeId);
-    if(!ms || !shade) continue;
-    Serial.printf("Matter: shade %u action %u value %u\n", cmd.shadeId, static_cast<uint8_t>(cmd.action), cmd.value);
+    if(cmd.index >= matterShadeCount) continue;
+    matter_shade_t *ms = &matterShades[cmd.index];
+    Serial.printf("Matter: %s %u action %u value %u\n", ms->isGroup ? "group" : "shade", ms->id, static_cast<uint8_t>(cmd.action), cmd.value);
     switch(cmd.action) {
       case matter_actions_t::lift:
-        ms->pendingLift = cmd.value;
-        ms->pendingTime = millis();
+      case matter_actions_t::tilt: {
+        bool settled = millis() - ms->lastTarget >= MATTER_TARGET_SETTLE;
+        ms->lastTarget = millis();
+        if(settled) {
+          if(cmd.action == matter_actions_t::lift) moveLift(ms, cmd.value);
+          else moveTilt(ms, cmd.value);
+        }
+        else if(cmd.action == matter_actions_t::lift) ms->pendingLift = cmd.value;
+        else ms->pendingTilt = cmd.value;
         break;
-      case matter_actions_t::tilt:
-        ms->pendingTilt = cmd.value;
-        ms->pendingTime = millis();
-        break;
+      }
       case matter_actions_t::stop:
         ms->pendingLift = ms->pendingTilt = -1;
-        // My stops a moving motor but sends an idle one to its favorite position.
-        if(shade->direction != 0 || shade->tiltDirection != 0) shade->sendCommand(somfy_commands::My);
+        stop(ms);
         break;
     }
   }
   for(uint8_t i = 0; i < matterShadeCount; i++) {
     matter_shade_t *ms = &matterShades[i];
-    if((ms->pendingLift < 0 && ms->pendingTilt < 0) || millis() - ms->pendingTime < MATTER_TARGET_SETTLE) continue;
-    SomfyShade *shade = somfy.getShadeById(ms->shadeId);
-    if(shade) {
-      if(ms->pendingLift >= 0) shade->moveToTarget(ms->pendingLift);
-      if(ms->pendingTilt >= 0) shade->moveToTiltTarget(ms->pendingTilt);
-    }
+    if((ms->pendingLift < 0 && ms->pendingTilt < 0) || millis() - ms->lastTarget < MATTER_TARGET_SETTLE) continue;
+    if(ms->pendingLift >= 0) moveLift(ms, ms->pendingLift);
+    if(ms->pendingTilt >= 0) moveTilt(ms, ms->pendingTilt);
     ms->pendingLift = ms->pendingTilt = -1;
   }
 }
@@ -258,14 +333,25 @@ void SomfyMatter::syncShades(bool force) {
   this->lastSync = millis();
   for(uint8_t i = 0; i < matterShadeCount; i++) {
     matter_shade_t *ms = &matterShades[i];
-    SomfyShade *shade = somfy.getShadeById(ms->shadeId);
-    if(!shade) continue;
+    float liftPos, liftTarget;
+    int8_t dir = 0, tiltDir = 0;
+    SomfyShade *shade = nullptr;
+    if(ms->isGroup) {
+      SomfyGroup *group = somfy.getGroupById(ms->id);
+      if(!group || !groupState(group, &liftPos, &liftTarget, &dir)) continue;
+    }
+    else {
+      shade = somfy.getShadeById(ms->id);
+      if(!shade) continue;
+      liftPos = shade->currentPos;
+      liftTarget = shade->target;
+      if(ms->hasLift) dir = shade->direction;
+      if(ms->hasTilt) tiltDir = shade->tiltDirection;
+    }
     MatterWindowCovering *ep = ms->ep;
-    int8_t dir = ms->hasLift ? shade->direction : 0;
-    int8_t tiltDir = ms->hasTilt ? shade->tiltDirection : 0;
     if(ms->hasLift) {
-      uint16_t target = toPercent100ths(shade->target);
-      uint16_t pos = toPercent100ths(shade->currentPos);
+      uint16_t target = toPercent100ths(liftTarget);
+      uint16_t pos = toPercent100ths(liftPos);
       if(force || target != ms->target) {
         ep->setTargetLiftPercent100ths(target);
         ms->target = target;
@@ -278,7 +364,7 @@ void SomfyMatter::syncShades(bool force) {
       }
       if(force || dir != ms->dir) ep->setOperationalState(MatterWindowCovering::LIFT, toOperationalState(dir));
     }
-    if(ms->hasTilt) {
+    if(ms->hasTilt && shade) {
       uint16_t target = toPercent100ths(shade->tiltTarget);
       uint16_t pos = toPercent100ths(shade->currentTiltPos);
       if(force || target != ms->tiltTarget) {
