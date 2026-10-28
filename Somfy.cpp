@@ -4329,6 +4329,9 @@ bool somfy_rx_queue_t::pop(somfy_rx_t *rx) {
 void Transceiver::sendFrame(byte *frame, uint8_t sync, uint8_t bitLength) {
   if(!this->config.enabled) return;
   uint32_t pin = 1 << this->config.TXPin;
+  // The Matter task shares this core at the same priority.  Switching to it in the middle of the
+  // waveform stretches a pulse and the motor drops the frame.
+  vTaskSuspendAll();
   if (sync == 2 || sync == 12) {  // Only with the first frame.  Repeats do not get a wakeup pulse.
     // All information online for the wakeup pulse appears to be incorrect.  While there is a wakeup
     // pulse it only sends an initial pulse.  There is no further delay after this.
@@ -4391,6 +4394,7 @@ void Transceiver::sendFrame(byte *frame, uint8_t sync, uint8_t bitLength) {
   // Inter-frame silence for 56-bit protocols are around 34ms.  However, an 80 bit protocol should
   // reduce this by the transmission of SYMBOL * 24 or 15,360us
   REG_WRITE(GPIO_OUT_W1TC_REG, pin);
+  xTaskResumeAll();
   // Below are the original calculations for inter-frame silence.  However, when actually inspecting this from
   // the remote it appears to be closer to 27500us.  The delayMicoseconds call cannot be called with
   // values larger than 16383.
