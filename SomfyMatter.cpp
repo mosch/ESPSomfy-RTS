@@ -22,6 +22,9 @@ using namespace esp_matter;
 // targets that follow within this time are collapsed into one so the motor does not get a burst of
 // up/down commands.
 #define MATTER_TARGET_SETTLE 1000
+// A scene like "close all blinds" commands every endpoint at once.  Frames for different motors sent
+// back to back are missed so radio commands are spaced out.
+#define MATTER_TX_GAP 250
 
 enum class matter_actions_t : uint8_t {
   lift = 0,
@@ -51,12 +54,15 @@ struct matter_shade_t {
   uint32_t lastTiltPos = 0;
   int16_t pendingLift = -1;
   int16_t pendingTilt = -1;
+  bool pendingStop = false;
   uint32_t lastTarget = 0;
+  uint32_t due = 0;
 };
 static matter_shade_t matterShades[MATTER_MAX_ENDPOINTS];
 static uint8_t matterShadeCount = 0;
 static QueueHandle_t matterQueue = nullptr;
 static TaskHandle_t matterLoopTask = nullptr;
+static uint32_t lastTx = 0;
 
 // ArduinoMatter only lets its own endpoint classes create the node.  We need it before
 // the first window covering so the aggregator becomes endpoint 1.
@@ -224,7 +230,7 @@ uint8_t SomfyMatter::endpointCount() { return matterShadeCount; }
 void SomfyMatter::start() {
   this->_started = true;
   matterLoopTask = xTaskGetCurrentTaskHandle();
-  matterQueue = xQueueCreate(16, sizeof(matter_cmd_t));
+  matterQueue = xQueueCreate(MATTER_MAX_ENDPOINTS * 2, sizeof(matter_cmd_t));
   Matter.setSetupPasscode(settings.Matter.passcode);
   Matter.setSetupDiscriminator(settings.Matter.discriminator);
   // The controller is already on the network.  BLE commissioning would only cost RAM.
@@ -306,26 +312,31 @@ void SomfyMatter::processCommands() {
       case matter_actions_t::tilt: {
         bool settled = millis() - ms->lastTarget >= MATTER_TARGET_SETTLE;
         ms->lastTarget = millis();
-        if(settled) {
-          if(cmd.action == matter_actions_t::lift) moveLift(ms, cmd.value);
-          else moveTilt(ms, cmd.value);
-        }
-        else if(cmd.action == matter_actions_t::lift) ms->pendingLift = cmd.value;
+        ms->due = settled ? millis() : millis() + MATTER_TARGET_SETTLE;
+        if(cmd.action == matter_actions_t::lift) ms->pendingLift = cmd.value;
         else ms->pendingTilt = cmd.value;
         break;
       }
       case matter_actions_t::stop:
         ms->pendingLift = ms->pendingTilt = -1;
-        stop(ms);
+        ms->pendingStop = true;
+        ms->due = millis();
         break;
     }
   }
+  // Only one radio command per gap.  The rest wait for the next loop.
+  if(millis() - lastTx < MATTER_TX_GAP) return;
   for(uint8_t i = 0; i < matterShadeCount; i++) {
     matter_shade_t *ms = &matterShades[i];
-    if((ms->pendingLift < 0 && ms->pendingTilt < 0) || millis() - ms->lastTarget < MATTER_TARGET_SETTLE) continue;
+    if(ms->pendingLift < 0 && ms->pendingTilt < 0 && !ms->pendingStop) continue;
+    if((int32_t)(millis() - ms->due) < 0) continue;
+    if(ms->pendingStop) stop(ms);
     if(ms->pendingLift >= 0) moveLift(ms, ms->pendingLift);
     if(ms->pendingTilt >= 0) moveTilt(ms, ms->pendingTilt);
     ms->pendingLift = ms->pendingTilt = -1;
+    ms->pendingStop = false;
+    lastTx = millis();
+    return;
   }
 }
 void SomfyMatter::syncShades(bool force) {
