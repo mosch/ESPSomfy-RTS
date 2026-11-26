@@ -398,7 +398,11 @@ void SomfyMatter::syncShades(bool force) {
 void SomfyMatter::loop() {
   if(!this->_started) {
     if(!settings.Matter.enabled || !this->supported()) return;
-    if(!net.connected() || net.softAPOpened) return;
+    // Wait for the network connection only, not for the fallback Soft AP to close.  The Soft AP can stay open
+    // after the WiFi is back (a client is still on it) and the stack is started only once per boot, so waiting
+    // for it kept Matter down until the next reboot.
+    if(!net.connected()) return;
+    if(net.connType != conn_types_t::wifi && net.connType != conn_types_t::ethernet) return;
     if(net.connType == conn_types_t::ethernet) {
       // Matter needs an IPv6 address on the ethernet interface before it starts.
       Matter.selectNetwork(MATTER_NETWORK_ETHERNET);

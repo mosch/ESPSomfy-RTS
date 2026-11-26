@@ -2173,7 +2173,8 @@ void Web::begin() {
     
     if(server.method() == HTTP_OPTIONS) { server.send(200, "OK"); return; }
     esp_task_wdt_delete(NULL);
-    if(net.softAPOpened) WiFi.disconnect(false);
+    // Only drop the station when it is not connected.  The Soft AP can be open next to a working connection.
+    if(net.softAPOpened && !net.connected()) WiFi.disconnect(false);
     int n = WiFi.scanNetworks(false, true);
     esp_task_wdt_add(NULL);
     
@@ -2457,7 +2458,7 @@ void Web::begin() {
         String passphrase = "";
         if (obj.containsKey("ssid")) ssid = obj["ssid"].as<String>();
         if (obj.containsKey("passphrase")) passphrase = obj["passphrase"].as<String>();
-        bool reboot;
+        bool reboot = false;
         if (ssid.compareTo(settings.WIFI.ssid) != 0) reboot = true;
         if (passphrase.compareTo(settings.WIFI.passphrase) != 0) reboot = true;
         if (!settings.WIFI.ssidExists(ssid.c_str()) && ssid.length() > 0) {

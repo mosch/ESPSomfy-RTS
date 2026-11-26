@@ -7,6 +7,8 @@
 
 #define CONNECT_TIMEOUT 20000
 #define SSID_SCAN_INTERVAL 60000
+// How long the fallback Soft AP stays open for a connected client once the network is back.
+#define SOFTAP_CLOSE_DELAY 120000
 class ESPNetwork {
   protected:
     unsigned long lastEmit = 0;
@@ -15,6 +17,8 @@ class ESPNetwork {
     int lastChannel = 0;
     int linkSpeed = 0;
     bool _connecting = false;
+    bool apPassSaved = false;
+    void saveAPPassphrase();
   public:
     unsigned long lastWifiScan = 0;
     bool ethStarted = false;
@@ -38,6 +42,7 @@ class ESPNetwork {
     uint32_t connectStart = 0;
     uint32_t connectTime = 0;
     bool openSoftAP();
+    void closeSoftAP();
     bool connect(conn_types_t ctype);
     bool connectWiFi(const uint8_t *bssid = nullptr, const int32_t channel = -1);
     bool connectWired();

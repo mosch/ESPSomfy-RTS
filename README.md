@@ -80,6 +80,10 @@ Requirements and limitations:
 * Endpoints are created at boot, so added, removed or renamed shades show up after a reboot.  Endpoint ids follow the shade ids, removing a shade changes the endpoints of shades created after it.
 * Every device generates its own random pairing passcode.  "Remove all Matter pairings" resets only the Matter data, not the ESPSomfy settings.
 
+Fallback hotspot:
+* When the controller cannot reach its WiFi it opens a hotspot named after its host name.  When the connection type is WiFi (or Ethernet with WiFi fallback) and the controller has been on its WiFi before, the hotspot uses the last WiFi passphrase that worked, not the one in the settings, so a mistyped or changed passphrase cannot lock you out.  Passphrases that are not 8 to 63 characters, open networks, devices without an SSID and Ethernet only devices get an open hotspot.  The remembered passphrase is kept when the settings are reset.
+* Once the network is back the hotspot closes, at the latest 2 minutes after reconnecting if a client is still on it.  Matter starts as soon as the network is up, it no longer waits for the hotspot to close.
+
 ### One time migration from the stock firmware
 The Matter firmware needs a different partition table, which cannot be changed over the air.  The layout in [partitions.csv](partitions.csv) keeps the settings (nvs at 0x9000) and the shades and web files (LittleFS at 0x290000) at the same place, so nothing has to be restored.
 

@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <esp_task_wdt.h>
+#include <esp_wifi.h>
 #include "ConfigSettings.h"
 #include "ESPNetwork.h"
 #include "Web.h"
@@ -82,6 +83,14 @@ void ESPNetwork::loop() {
   conn_types_t ctype = this->preferredConnType();
   this->connect(ctype); // Connection timeout handled in connect function as well as the opening of the Soft AP if needed.
   if(this->connecting()) return; // If we are currently attempting to connect to something then we need to bail here.
+  if(this->connected() && this->connType == conn_types_t::wifi) this->saveAPPassphrase();
+  else this->apPassSaved = false;
+  if(this->softAPOpened && !this->openingSoftAP && ctype != conn_types_t::ap && this->connected() &&
+    (this->connType == conn_types_t::wifi || this->connType == conn_types_t::ethernet)) {
+    // The network is back, close the fallback Soft AP.  This is the only place that closes it once connected.
+    // If a client is still on it give that client a moment, then close it anyway.
+    if(WiFi.softAPgetStationNum() == 0 || millis() - this->connectTime > SOFTAP_CLOSE_DELAY) this->closeSoftAP();
+  }
   if(_apScanning) {
     if(settings.WIFI.hidden ||                                    // This user has elected to use a hidden AP.
       (this->connected() && !settings.WIFI.roaming) ||            // We are already connected and should not be roaming.
@@ -227,11 +236,9 @@ void ESPNetwork::setConnected(conn_types_t connType) {
   this->connectTime = millis();
   connectRetries = 0;
   Serial.println("Setting connected...");
+  // The fallback Soft AP is closed by loop(), not here.  This runs in the event task and closing it from two
+  // tasks could switch the AP back on or change the WiFi mode at the same time.
   if(this->connType == conn_types_t::wifi) {
-    if(this->softAPOpened && WiFi.softAPgetStationNum() == 0) {
-      WiFi.softAPdisconnect(true);
-      WiFi.mode(WIFI_STA);
-    }
     this->_connecting = false;
     this->ssid = WiFi.SSID();
     this->mac = WiFi.BSSIDstr();
@@ -240,11 +247,6 @@ void ESPNetwork::setConnected(conn_types_t connType) {
     this->connectAttempts++;
   }
   else if(this->connType == conn_types_t::ethernet) {
-    if(this->softAPOpened) {
-      Serial.println("Disonnecting from SoftAP");
-      WiFi.softAPdisconnect(true);
-      WiFi.mode(WIFI_OFF);
-    }
     this->connectAttempts++;
     this->_connecting = false;
     this->wifiFallback = false;
@@ -582,9 +584,52 @@ bool ESPNetwork::openSoftAP() {
   Serial.println();
   Serial.println("Turning the HotSpot On");
   esp_task_wdt_reset(); // Make sure we do not reboot here.
-  WiFi.softAP(strlen(settings.hostname) > 0 ? settings.hostname : "ESPSomfy RTS", "");
+  // A new device needs an open Soft AP for onboarding.  On a WiFi device that has been on its network the Soft AP
+  // is only a fallback for when the WiFi is gone, so protect it with the last passphrase that worked (see
+  // saveAPPassphrase).  Otherwise anyone nearby can join it and read the settings, including that passphrase.
+  // Ethernet only devices keep the open Soft AP because their WiFi settings may be old and forgotten.
+  String pass;
+  if(settings.WIFI.ssid[0] != '\0' &&
+    (settings.connType == conn_types_t::wifi || settings.connType == conn_types_t::ethernetpref)) {
+    SomfyPreferences p;
+    if(p.begin("WIFIAP", true)) {
+      pass = p.getString("pass", "");
+      p.end();
+    }
+    if(pass.length() < 8 || pass.length() > 63) pass = ""; // WPA2 passphrases are 8 to 63 characters.
+  }
+  WiFi.softAP(strlen(settings.hostname) > 0 ? settings.hostname : "ESPSomfy RTS", pass.c_str());
   delay(200);
   return true;
+}
+void ESPNetwork::closeSoftAP() {
+  // Only the loop task calls this.  Do not use softAPdisconnect(), it turns the AP back on to clear its config
+  // before turning it off.  Check the radio instead of softAPOpened, the AP stop event that clears the flag can
+  // be lost when the mode changes.
+  if(WiFi.getMode() & WIFI_MODE_AP) {
+    Serial.printf("Closing the Soft AP (%d clients)\n", WiFi.softAPgetStationNum());
+    if(this->connType == conn_types_t::ethernet) WiFi.mode(WIFI_OFF);
+    else WiFi.enableAP(false);
+  }
+  this->softAPOpened = false;
+}
+void ESPNetwork::saveAPPassphrase() {
+  // Remember the passphrase that got us onto the WiFi for the fallback Soft AP.  The one in the settings may be
+  // mistyped or changed and would lock the owner out of the Soft AP.  Written only when it changes.
+  // Take the passphrase from the driver, the settings can change without a reconnect.  Skip open networks, any
+  // text in the passphrase field works there.
+  if(this->apPassSaved) return;
+  this->apPassSaved = true;
+  wifi_ap_record_t ap;
+  if(esp_wifi_sta_get_ap_info(&ap) != ESP_OK || ap.authmode == WIFI_AUTH_OPEN) return;
+  wifi_config_t conf;
+  if(esp_wifi_get_config(WIFI_IF_STA, &conf) != ESP_OK) return;
+  char used[65] = "";
+  memcpy(used, conf.sta.password, strnlen((const char *)conf.sta.password, sizeof(conf.sta.password)));
+  SomfyPreferences p;
+  if(!p.begin("WIFIAP")) return;
+  if(p.getString("pass", "").compareTo(used) != 0) p.putString("pass", used);
+  p.end();
 }
 bool ESPNetwork::connected() {
   if(this->connecting()) return false;
